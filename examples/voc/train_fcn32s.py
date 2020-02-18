@@ -10,7 +10,12 @@ import subprocess
 import torch
 import yaml
 
-import torchfcn
+from torchfcn.models.fcn32s import FCN32s
+from torchfcn.models.fcn16s import FCN16s
+from torchfcn.models.fcn8s import FCN8s
+from torchfcn.models.vgg import VGG16
+from torchfcn.trainer import Trainer
+from torchfcn.datasets.voc import SBDClassSeg, VOC2011ClassSeg
 
 
 def git_hash():
@@ -28,9 +33,9 @@ def get_parameters(model, bias=False):
         nn.MaxPool2d,
         nn.Dropout2d,
         nn.Sequential,
-        torchfcn.models.FCN32s,
-        torchfcn.models.FCN16s,
-        torchfcn.models.FCN8s,
+        FCN32s,
+        FCN16s,
+        FCN8s,
     )
     for m in model.modules():
         if isinstance(m, nn.Conv2d):
@@ -95,16 +100,15 @@ def main():
     root = osp.expanduser('~/data/datasets')
     kwargs = {'num_workers': 4, 'pin_memory': True} if cuda else {}
     train_loader = torch.utils.data.DataLoader(
-        torchfcn.datasets.SBDClassSeg(root, split='train', transform=True),
+        SBDClassSeg(root, split='train', transform=True),
         batch_size=1, shuffle=True, **kwargs)
     val_loader = torch.utils.data.DataLoader(
-        torchfcn.datasets.VOC2011ClassSeg(
-            root, split='seg11valid', transform=True),
+        VOC2011ClassSeg(root, split='seg11valid', transform=True),
         batch_size=1, shuffle=False, **kwargs)
 
     # 2. model
 
-    model = torchfcn.models.FCN32s(n_class=21)
+    model = FCN32s(n_class=21)
     start_epoch = 0
     start_iteration = 0
     if args.resume:
@@ -113,7 +117,7 @@ def main():
         start_epoch = checkpoint['epoch']
         start_iteration = checkpoint['iteration']
     else:
-        vgg16 = torchfcn.models.VGG16(pretrained=True)
+        vgg16 = VGG16(pretrained=True)
         model.copy_params_from_vgg16(vgg16)
     if cuda:
         model = model.cuda()
@@ -132,7 +136,7 @@ def main():
     if args.resume:
         optim.load_state_dict(checkpoint['optim_state_dict'])
 
-    trainer = torchfcn.Trainer(
+    trainer = Trainer(
         cuda=cuda,
         model=model,
         optimizer=optim,
