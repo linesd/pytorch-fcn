@@ -1,0 +1,9 @@
+git_hash: d9920e6
+gpu: 0
+lr: 1.0e-10
+max_iteration: 100000
+model: FCN32s
+momentum: 0.99
+out: /home/dl00065/PycharmProjects/pytorch-fcn/logs/20200218_194323.760838
+resume: null
+weight_decay: 0.0005

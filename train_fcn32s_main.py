@@ -4,14 +4,53 @@ import argparse
 import datetime
 import os
 import os.path as osp
+import shlex
+import subprocess
 
 import torch
 import yaml
 
-import torchfcn
+from torchfcn.models.fcn32s import FCN32s
+from torchfcn.models.fcn16s import FCN16s
+from torchfcn.models.fcn8s import FCN8s
+from torchfcn.models.vgg import VGG16
+from torchfcn.trainer import Trainer
+from torchfcn.datasets.voc import SBDClassSeg, VOC2011ClassSeg
 
-from train_fcn32s_main import get_parameters
-from train_fcn32s_main import git_hash
+
+def git_hash():
+    cmd = 'git log -n 1 --pretty="%h"'
+    ret = subprocess.check_output(shlex.split(cmd)).strip()
+    if isinstance(ret, bytes):
+        ret = ret.decode()
+    return ret
+
+
+def get_parameters(model, bias=False):
+    import torch.nn as nn
+    modules_skipped = (
+        nn.ReLU,
+        nn.MaxPool2d,
+        nn.Dropout2d,
+        nn.Sequential,
+        FCN32s,
+        FCN16s,
+        FCN8s,
+    )
+    for m in model.modules():
+        if isinstance(m, nn.Conv2d):
+            if bias:
+                yield m.bias
+            else:
+                yield m.weight
+        elif isinstance(m, nn.ConvTranspose2d):
+            # weight is frozen because it is just a bilinear upsampling
+            if bias:
+                assert m.bias is None
+        elif isinstance(m, modules_skipped):
+            continue
+        else:
+            raise ValueError('Unexpected module: %s' % str(m))
 
 
 here = osp.dirname(osp.abspath(__file__))
@@ -29,7 +68,7 @@ def main():
         '--max-iteration', type=int, default=100000, help='max iteration'
     )
     parser.add_argument(
-        '--lr', type=float, default=1.0e-14, help='learning rate',
+        '--lr', type=float, default=1.0e-10, help='learning rate',
     )
     parser.add_argument(
         '--weight-decay', type=float, default=0.0005, help='weight decay',
@@ -37,14 +76,9 @@ def main():
     parser.add_argument(
         '--momentum', type=float, default=0.99, help='momentum',
     )
-    parser.add_argument(
-        '--pretrained-model',
-        default=torchfcn.models.FCN16s.download(),
-        help='pretrained model of FCN16s',
-    )
     args = parser.parse_args()
 
-    args.model = 'FCN8s'
+    args.model = 'FCN32s'
     args.git_hash = git_hash()
 
     now = datetime.datetime.now()
@@ -66,16 +100,15 @@ def main():
     root = osp.expanduser('~/data/datasets')
     kwargs = {'num_workers': 4, 'pin_memory': True} if cuda else {}
     train_loader = torch.utils.data.DataLoader(
-        torchfcn.datasets.SBDClassSeg(root, split='train', transform=True),
+        SBDClassSeg(root, split='train', transform=True),
         batch_size=1, shuffle=True, **kwargs)
     val_loader = torch.utils.data.DataLoader(
-        torchfcn.datasets.VOC2011ClassSeg(
-            root, split='seg11valid', transform=True),
+        VOC2011ClassSeg(root, split='seg11valid', transform=True),
         batch_size=1, shuffle=False, **kwargs)
 
     # 2. model
 
-    model = torchfcn.models.FCN8s(n_class=21)
+    model = FCN32s(n_class=21)
     start_epoch = 0
     start_iteration = 0
     if args.resume:
@@ -84,13 +117,8 @@ def main():
         start_epoch = checkpoint['epoch']
         start_iteration = checkpoint['iteration']
     else:
-        fcn16s = torchfcn.models.FCN16s()
-        state_dict = torch.load(args.pretrained_model)
-        try:
-            fcn16s.load_state_dict(state_dict)
-        except RuntimeError:
-            fcn16s.load_state_dict(state_dict['model_state_dict'])
-        model.copy_params_from_fcn16s(fcn16s)
+        vgg16 = VGG16(pretrained=True)
+        model.copy_params_from_vgg16(vgg16)
     if cuda:
         model = model.cuda()
 
@@ -108,7 +136,7 @@ def main():
     if args.resume:
         optim.load_state_dict(checkpoint['optim_state_dict'])
 
-    trainer = torchfcn.Trainer(
+    trainer = Trainer(
         cuda=cuda,
         model=model,
         optimizer=optim,
